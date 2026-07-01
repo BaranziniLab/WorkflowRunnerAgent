@@ -1,0 +1,26 @@
+{
+  "name": "workflowrunneragent",
+  "display_name": "WorkflowRunnerAgent",
+  "description": "MCP helper for Nextflow, nf-core, Snakemake, CWL, WDL, container/runtime checks, and reproducible workflow run manifests.",
+  "version": "0.1.0",
+  "entry_point": "workflowrunneragent",
+  "repository": "https://github.com/BaranziniLab/WorkflowRunnerAgent",
+  "license": "Apache-2.0",
+  "tools_count": 6,
+  "env_vars": [
+    {
+      "key": "WORKFLOW_RUNNER_LOG_LEVEL",
+      "required": false,
+      "auto_propagate": true,
+      "default": "INFO",
+      "description": "Logging level",
+      "secret": false
+    }
+  ],
+  "skills": [
+    {
+      "name": "workflow-runner",
+      "description": "Use WorkflowRunnerAgent for workflow execution workflows, provenance, and guarded tool/API access."
+    }
+  ]
+}
