@@ -1,40 +1,37 @@
 # WorkflowRunnerAgent
 
-MCP helper for Nextflow, nf-core, Snakemake, CWL, WDL, container/runtime checks, and reproducible workflow run manifests.
+Retired. This extension no longer runs workflow tools and only reports that it is retired. Remove it.
 
-This repository is a BioRouter `.brxt` extension following the same root-manifest, Python-package, and bundled-skill convention used by `SPOKEAgent` and `UCSFOMOPAgent`.
+Current version: **0.2.0**
+
+> **Retired.** WorkflowRunnerAgent was retired on 2026-11-22 and no longer calls any service. Why: It ran local commands without the secret guard. The Developer extension is the one command runner and carries the guard. Use instead: Use the Developer extension with the workflow-management skill.
+
+This is the final release of a retired Biorouter extension. It replaces every
+earlier tool with one, `workflowrunner_status`, which shows the notice above. It holds no
+credentials, reads no setting and calls no service. Remove the extension in
+Biorouter once you no longer need the notice.
 
 ## Tools
 
-- `get_workflowrunneragent_status`: show configured environment, API targets, and local command availability without revealing secrets.
-- `list_workflowrunneragent_api_targets`: list named external API bases.
-- `call_workflowrunneragent_api`: call a guarded API endpoint; write-capable HTTP methods require `allow_mutation=true`.
-- `plan_workflowrunneragent_command`: inspect whether a local command is allowlisted and what approval is needed.
-- `run_workflowrunneragent_command`: run an allowlisted command without shell expansion after explicit `allow_execute=true` approval.
-- `summarize_workflowrunneragent_resource`: summarize a JSON payload or export while preserving provenance fields.
+- `workflowrunner_status`: shows why WorkflowRunnerAgent was retired and what to use instead. It calls no service.
 
-## Configuration
+## Bundled skills
 
-| Variable | Required | Secret | Purpose |
-|---|---:|---:|---|
-| `WORKFLOW_RUNNER_LOG_LEVEL` | false | false | Logging level |
+Every skill an earlier release bundled is kept, and each now says where its content
+moved. An update never deletes a file an earlier version installed, so keeping the
+paths is what replaces the old instructions.
 
-
-## Build
+## Develop and release
 
 ```bash
 uv sync
-scripts/build_brxt.sh
+uv run python -m unittest discover -s tests -v
+uv run python scripts/build_brxt.py
 ```
 
-The bundle is written to `dist/workflowrunneragent.brxt`.
-
-## Install in BioRouter
-
-```bash
-biorouter extension install dist/workflowrunneragent.brxt
-```
+Do not edit `src/workflowrunneragent/_kit/` or `tests/kit_testing/`: they are vendored from the BRXT
+adapter kit in the Biorouter repository (`scripts/brxt-adapter-kit/`).
 
 ## License
 
-Apache-2.0. See `LICENSE`.
+Apache-2.0. See `LICENSE` and `NOTICE`.

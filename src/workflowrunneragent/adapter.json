@@ -1,0 +1,14 @@
+{
+  "kit_spec": 1,
+  "service": "workflowrunner",
+  "service_title": "Workflow runner",
+  "kind": "tombstone",
+  "notice": {
+    "status": "retired",
+    "date": "2026-11-22",
+    "reason": "It ran local commands without the secret guard. The Developer extension is the one command runner and carries the guard.",
+    "use_instead": "Use the Developer extension with the workflow-management skill."
+  },
+  "id": "workflowrunneragent",
+  "display_name": "WorkflowRunnerAgent"
+}

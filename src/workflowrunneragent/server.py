@@ -1,189 +1,48 @@
-"""WorkflowRunnerAgent MCP server."""
+"""WorkflowRunnerAgent MCP server.
 
-from __future__ import annotations
+The service surface (targets, credentials, routes, instructions and any notice)
+is declared in adapter.json. The HTTP rules live in the vendored kit under
+_kit/; never edit those files here, change the kit and vendor it again.
 
-import json
+Add typed tools for this service in register_extra_tools. A typed tool that
+reaches the network uses the kit's SafeHttpClient, never httpx or requests
+directly, and no tool runs a local command: the Developer shell is the one
+command runner in Biorouter.
+"""
+
 import logging
 import os
-import subprocess
-from pathlib import Path
-from typing import Any, Literal
+from importlib import resources
 
-import httpx
-from fastmcp.exceptions import ToolError
-from fastmcp.server import FastMCP
-from fastmcp.tools.tool import TextContent, ToolResult
-from mcp.types import ToolAnnotations
-from pydantic import BaseModel, Field
+from fastmcp import FastMCP
 
-logger = logging.getLogger("WorkflowRunnerAgent")
+from workflowrunneragent import __version__
+from workflowrunneragent._kit.spec import AdapterSpec, load_adapter_spec
+from workflowrunneragent._kit.tools import build_server
 
-API_TARGETS: dict[str, str] = {
-    "nf_core": "https://nf-co.re",
-    "dockstore": "https://dockstore.org/api"
-}
-ALLOWED_COMMANDS: set[str] = set(["nextflow", "nf-core", "snakemake", "cwltool", "miniwdl", "docker", "singularity", "apptainer", "git", "uv", "python"])
-READ_METHODS = {"GET", "HEAD", "OPTIONS"}
-WRITE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+LOG_LEVEL_ENV = ""
 
 
-class WorkflowrunneragentConfigConfig(BaseModel):
-    """Runtime configuration for WorkflowRunnerAgent."""
-
-    log_level: str = Field(default_factory=lambda: os.getenv("WORKFLOW_RUNNER_LOG_LEVEL", "INFO"))
-
-
-def _result(payload: Any) -> ToolResult:
-    return ToolResult(content=[TextContent(type="text", text=json.dumps(payload, indent=2, sort_keys=True))])
+def load_spec() -> AdapterSpec:
+    text = resources.files("workflowrunneragent").joinpath("adapter.json").read_text(encoding="utf-8")
+    return load_adapter_spec(text)
 
 
-def _headers(target: str) -> dict[str, str]:
-    headers = {"Accept": "application/json", "User-Agent": "BioRouter-workflowrunneragent/0.1"}
-    optional_keys = []
-    for key in optional_keys:
-        value = os.getenv(key)
-        if value:
-            if "API_KEY" in key and target == "semantic_scholar":
-                headers["x-api-key"] = value
-            else:
-                headers.setdefault("Authorization", f"Bearer {value}")
-    return headers
+def register_extra_tools(mcp: FastMCP, spec: AdapterSpec) -> None:
+    """Typed tools for this service. None by default."""
 
 
-def _join(base_url: str, path: str) -> str:
-    if path.startswith("http://") or path.startswith("https://"):
-        return path
-    return base_url.rstrip("/") + "/" + path.lstrip("/")
-
-
-def create_server(config: WorkflowrunneragentConfigConfig) -> FastMCP:
-    logging.basicConfig(level=getattr(logging, config.log_level.upper(), logging.INFO))
-    mcp = FastMCP("WorkflowRunnerAgent")
-
-    @mcp.tool(
-        name="get_workflowrunneragent_status",
-        annotations=ToolAnnotations(title="Get WorkflowRunnerAgent status", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
-    )
-    def get_status() -> ToolResult:
-        """Report configuration, API targets, and local command availability."""
-        command_status = {cmd: bool(__import__("shutil").which(cmd)) for cmd in sorted(ALLOWED_COMMANDS)}
-        env_keys = ["WORKFLOW_RUNNER_LOG_LEVEL"]
-        return _result({
-            "service": "workflow execution",
-            "api_targets": API_TARGETS,
-            "allowed_commands": sorted(ALLOWED_COMMANDS),
-            "command_available": command_status,
-            "configured_env": {key: bool(os.getenv(key)) for key in env_keys},
-            "license": "Apache-2.0",
-        })
-
-    @mcp.tool(
-        name="list_workflowrunneragent_api_targets",
-        annotations=ToolAnnotations(title="List WorkflowRunnerAgent API targets", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
-    )
-    def list_api_targets() -> ToolResult:
-        """List named API targets supported by this extension."""
-        return _result({"targets": API_TARGETS})
-
-    @mcp.tool(
-        name="call_workflowrunneragent_api",
-        annotations=ToolAnnotations(title="Call a guarded workflow execution API endpoint", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
-    )
-    def call_api(
-        target: str = Field(description="Named API target from list_workflowrunneragent_api_targets, or 'custom' for a full URL in path."),
-        path: str = Field(description="Relative API path, or full URL when target='custom'."),
-        method: Literal["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", "DELETE"] = Field(default="GET"),
-        query: dict[str, Any] | None = Field(default=None, description="Query parameters."),
-        json_body: dict[str, Any] | None = Field(default=None, description="JSON body for non-GET requests."),
-        allow_mutation: bool = Field(default=False, description="Must be true for POST/PUT/PATCH/DELETE."),
-        timeout_s: float = Field(default=30.0, ge=1.0, le=120.0),
-    ) -> ToolResult:
-        """Call a public or authenticated scientific API with write methods blocked by default."""
-        method_upper = method.upper()
-        if method_upper in WRITE_METHODS and not allow_mutation:
-            raise ToolError("Mutation-capable HTTP methods require explicit user approval and allow_mutation=true.")
-        if target == "custom":
-            if not path.startswith(("https://", "http://")):
-                raise ToolError("target='custom' requires a full URL in path.")
-            url = path
-        else:
-            if target not in API_TARGETS:
-                raise ToolError(f"Unknown API target '{target}'. Call list_workflowrunneragent_api_targets first.")
-            url = _join(API_TARGETS[target], path)
-        try:
-            with httpx.Client(timeout=timeout_s, follow_redirects=True) as client:
-                response = client.request(method_upper, url, params=query, json=json_body, headers=_headers(target))
-            ctype = response.headers.get("content-type", "")
-            body: Any
-            if "json" in ctype.lower():
-                body = response.json()
-            else:
-                text = response.text
-                body = text[:20000] + ("...(truncated)" if len(text) > 20000 else "")
-            return _result({"url": str(response.url), "status_code": response.status_code, "ok": response.is_success, "content_type": ctype, "body": body})
-        except httpx.HTTPError as exc:
-            raise ToolError(f"API request failed: {exc}") from exc
-
-    @mcp.tool(
-        name="plan_workflowrunneragent_command",
-        annotations=ToolAnnotations(title="Plan a guarded local command", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
-    )
-    def plan_command(
-        command: str = Field(description="Command name to evaluate."),
-        args: list[str] | None = Field(default=None, description="Arguments to evaluate."),
-    ) -> ToolResult:
-        """Explain whether a local command is allowed and what approval is needed."""
-        args = args or []
-        return _result({
-            "command": command,
-            "args": args,
-            "allowed": command in ALLOWED_COMMANDS,
-            "requires_allow_execute": True,
-            "guidance": "Run only after the user approves the exact command, working directory, inputs, and side effects. Prefer version/status checks before expensive jobs.",
-        })
-
-    @mcp.tool(
-        name="run_workflowrunneragent_command",
-        annotations=ToolAnnotations(title="Run a guarded local command", readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False),
-    )
-    def run_command(
-        command: str = Field(description="Allowed command name."),
-        args: list[str] = Field(default_factory=list, description="Arguments passed without shell expansion."),
-        cwd: str | None = Field(default=None, description="Working directory."),
-        allow_execute: bool = Field(default=False, description="Must be true after explicit user approval."),
-        timeout_s: float = Field(default=60.0, ge=1.0, le=3600.0),
-    ) -> ToolResult:
-        """Run an allowlisted local command without a shell."""
-        if command not in ALLOWED_COMMANDS:
-            raise ToolError(f"Command '{command}' is not in this extension's allowlist.")
-        if not allow_execute:
-            raise ToolError("Local command execution requires explicit approval and allow_execute=true.")
-        workdir = Path(cwd).expanduser() if cwd else None
-        if workdir and not workdir.exists():
-            raise ToolError(f"Working directory does not exist: {workdir}")
-        try:
-            proc = subprocess.run([command, *args], cwd=str(workdir) if workdir else None, text=True, capture_output=True, timeout=timeout_s, check=False)
-            return _result({"command": [command, *args], "cwd": str(workdir) if workdir else None, "returncode": proc.returncode, "stdout": proc.stdout[-20000:], "stderr": proc.stderr[-20000:]})
-        except subprocess.TimeoutExpired as exc:
-            raise ToolError(f"Command timed out after {timeout_s} seconds: {exc}") from exc
-
-    @mcp.tool(
-        name="summarize_workflowrunneragent_resource",
-        annotations=ToolAnnotations(title="Summarize a workflow execution payload", readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=True),
-    )
-    def summarize_resource(payload: dict[str, Any] = Field(description="JSON payload or exported metadata.")) -> ToolResult:
-        """Summarize a JSON payload without making network calls."""
-        keys = list(payload.keys())
-        provenance = [k for k in keys if k.lower() in {"id", "identifier", "accession", "doi", "pmid", "pmcid", "version", "created_at", "updated_at", "url", "name", "title"}]
-        return _result({"service": "workflow execution", "top_level_keys": keys, "provenance_fields_present": provenance, "preview": {k: payload[k] for k in keys[:20]}})
-
+def create_server() -> FastMCP:
+    spec = load_spec()
+    mcp = build_server(spec, version=__version__)
+    register_extra_tools(mcp, spec)
     return mcp
 
 
-def main(transport: Literal["stdio", "sse", "http"] = "stdio", log_level: str | None = None) -> None:
-    config = WorkflowrunneragentConfigConfig(log_level=log_level or os.getenv("WORKFLOW_RUNNER_LOG_LEVEL", "INFO"))
-    logger.info("Starting WorkflowRunnerAgent")
-    create_server(config).run()
+def main() -> None:
+    level = os.getenv(LOG_LEVEL_ENV, "INFO").upper() if LOG_LEVEL_ENV else "INFO"
+    logging.basicConfig(level=getattr(logging, level, logging.INFO))
+    create_server().run(transport="stdio", show_banner=False)
 
 
 if __name__ == "__main__":
